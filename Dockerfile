@@ -1,16 +1,19 @@
 # Stage 1: Build stage
 FROM php:8.2-cli-alpine AS builder
 
+# Install build dependencies (including sqlite-dev for pdo_sqlite)
 RUN apk add --no-cache \
     git \
     curl \
     libpng-dev \
     libzip-dev \
+    sqlite-dev \
     zip \
     unzip \
     nodejs \
     npm
 
+# Install PHP extensions (pdo_sqlite is part of pdo, but needs sqlite-dev)
 RUN docker-php-ext-install pdo pdo_sqlite zip
 
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -29,14 +32,20 @@ RUN npm run build
 # Stage 2: Production
 FROM php:8.2-fpm-alpine
 
+# Install runtime dependencies (sqlite-libs for runtime, sqlite-dev for building extensions)
 RUN apk add --no-cache \
     nginx \
     supervisor \
     libpng \
     libzip \
-    sqlite
+    sqlite \
+    sqlite-dev
 
+# Install PHP extensions (need sqlite-dev here too for building)
 RUN docker-php-ext-install pdo pdo_sqlite zip
+
+# Remove sqlite-dev after building (optional, saves space)
+RUN apk del sqlite-dev
 
 RUN addgroup -g 1000 www && \
     adduser -u 1000 -G www -s /bin/sh -D www
