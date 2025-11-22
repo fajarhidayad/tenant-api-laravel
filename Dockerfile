@@ -1,24 +1,22 @@
 # Stage 1: Build dependencies
-FROM php:8.3-cli AS builder
+FROM php:8.3-cli-alpine AS builder
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies untuk build
+RUN apk add --no-cache \
     git \
     unzip \
     curl \
+    nodejs \
+    npm \
     libpng-dev \
-    libonig-dev \
+    oniguruma-dev \
     libxml2-dev \
     libzip-dev \
-    libsqlite3-dev \
+    sqlite-dev \
     && docker-php-ext-install pdo pdo_sqlite mbstring zip exif pcntl bcmath gd
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-
-# Install Node.js untuk build assets
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs
 
 WORKDIR /app
 
@@ -42,22 +40,36 @@ RUN npm run build
 # Stage 2: Production image
 FROM php:8.3-fpm-alpine AS production
 
-# Install dependencies
+# Install build dependencies, compile extensions, lalu hapus build deps
 RUN apk add --no-cache \
     nginx \
     supervisor \
     sqlite \
+    sqlite-libs \
     libpng \
     libzip \
     oniguruma \
-    && docker-php-ext-install pdo pdo_sqlite mbstring zip exif pcntl bcmath gd
+    curl \
+    # Build dependencies (temporary)
+    && apk add --no-cache --virtual .build-deps \
+    libpng-dev \
+    libzip-dev \
+    oniguruma-dev \
+    sqlite-dev \
+    # Install PHP extensions
+    && docker-php-ext-install pdo pdo_sqlite mbstring zip exif pcntl bcmath gd \
+    # Cleanup build dependencies
+    && apk del .build-deps \
+    && rm -rf /var/cache/apk/*
+
+# Create necessary directories
+RUN mkdir -p /var/log/supervisor \
+    && mkdir -p /run/nginx
 
 # Set working directory
 WORKDIR /var/www/html
 
 # Copy built application from builder
-COPY --from=builder /app/vendor ./vendor
-COPY --from=builder /app/public ./public
 COPY --from=builder /app .
 
 # Create SQLite database directory
@@ -77,6 +89,7 @@ RUN chown -R www-data:www-data /var/www/html \
 
 # Create entrypoint script
 RUN echo '#!/bin/sh' > /entrypoint.sh \
+    && echo 'set -e' >> /entrypoint.sh \
     && echo 'php artisan config:cache' >> /entrypoint.sh \
     && echo 'php artisan route:cache' >> /entrypoint.sh \
     && echo 'php artisan view:cache' >> /entrypoint.sh \
@@ -84,11 +97,11 @@ RUN echo '#!/bin/sh' > /entrypoint.sh \
     && echo 'exec supervisord -c /etc/supervisor/conf.d/supervisord.conf' >> /entrypoint.sh \
     && chmod +x /entrypoint.sh
 
-# Expose port (Dokploy default untuk Laravel: 8000, tapi nginx biasanya 80)
+# Expose port
 EXPOSE 80
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD curl -f http://localhost/up || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
